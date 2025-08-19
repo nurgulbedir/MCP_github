@@ -1,0 +1,8 @@
+fastapi
+uvicorn[standard]
+cohere
+requests
+pydantic-settings
+python-dotenv
+streamlit
+PyYAML
