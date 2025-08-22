@@ -5,7 +5,6 @@ import json
 # FastAPI sunucumuzun adresi. Docker kullanmıyorsak localhost'tur.
 API_URL = "http://127.0.0.1:8000/api/query"
 
-# --- Streamlit Arayüz Ayarları ---
 
 st.set_page_config(
     page_title="AI Asistanı",
@@ -38,25 +37,40 @@ if prompt := st.chat_input("Mesajınızı buraya yazın..."):
 
     # 2. Asistanın cevabı için bir bekleme alanı oluştur
     with st.chat_message("assistant"):
-        message_placeholder = st.empty()
-        message_placeholder.markdown("...")  # Kullanıcıya beklediğini göster
-
         try:
-            # 3. FastAPI backend'ine isteği gönder
-            payload = {"message": prompt}
-            response = requests.post(API_URL, json=payload)
+            # 2. CANLI AKIŞ (STREAMING) İÇİN GENERATOR FONKSİYONU
+            # Bu fonksiyon, backend'den gelen veri akışını parça parça yakalar.
+            def stream_backend_response():
 
-            # Yanıt başarılıysa
-            if response.status_code == 200:
-                api_response = response.json()
-                full_response = api_response.get("reply", "Bir hata oluştu.")
-            # Yanıt başarısızsa
-            else:
-                full_response = f"Hata: Sunucudan {response.status_code} koduyla yanıt alındı."
+                # 3. HAFIZAYI (CHAT HISTORY) HAZIRLAMA VE GÖNDERME
+                # Bir önceki konuşmaları, backend'in anlayacağı formata çeviriyoruz.
+                cohere_chat_history = []
+                # Yeni prompt hariç, önceki tüm mesajları al.
+                for msg in st.session_state.messages[:-1]:
+                    role = "USER" if msg["role"] == "user" else "CHATBOT"
+                    cohere_chat_history.append({"role": role, "message": msg["content"]})
+
+                # Backend'e gönderilecek olan tam paket (yeni mesaj + geçmiş)
+                payload = {
+                    "message": prompt,
+                    "chat_history": cohere_chat_history
+                }
+
+                # stream=True ile bağlantıyı açık tutuyor ve canlı yayın başlatıyoruz.
+                with requests.post(API_URL, json=payload, stream=True) as response:
+                    response.raise_for_status()  # HTTP hatası varsa hata fırlat
+                    # Gelen her metin parçasını ("chunk") anında dışarı "yield" et.
+                    for chunk in response.iter_content(chunk_size=None, decode_unicode=True):
+                        yield chunk
+
+
+            # 4. YAZIYORMUŞ GİBİ GÖSTERME
+            # st.write_stream, yukarıdaki fonksiyondan gelen her parçayı anında ekrana yazar.
+            # Akış bittiğinde, birleşen tam metni 'full_response' değişkenine atar.
+            full_response = st.write_stream(stream_backend_response)
+
+            # Tamamlanan cevabı, gelecekteki konuşmalar için hafızaya ekliyoruz.
+            st.session_state.messages.append({"role": "assistant", "content": full_response})
 
         except requests.exceptions.RequestException as e:
-            full_response = f"API bağlantı hatası: {e}"
-
-        # 4. Gelen cevabı ekrana yazdır ve sohbet geçmişine ekle
-        message_placeholder.markdown(full_response)
-        st.session_state.messages.append({"role": "assistant", "content": full_response})
+            st.error(f"API bağlantı hatası: {e}")
